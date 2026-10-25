@@ -2,24 +2,31 @@ extends Node
 
 var _processed = {}
 var _scan_timer = 0.0
+var _cached_path: NodePath = "" # 记住成功找到的路径，下次直接瞬移过去
 
 func _ready():
-    # 用定时器，每 0.5 秒才扫描一次，彻底解决卡顿！
     var timer = Timer.new()
-    timer.wait_time = 0.5
+    timer.wait_time = 1.0 # 降低频率，1秒扫一次就够了
     timer.autostart = true
     timer.connect("timeout", self, "_scan_for_popups")
     add_child(timer)
 
 func _scan_for_popups():
-    var popups = _find_popups(get_tree().root)
+    # 1. 如果已经记住了路径，直接去那个路径找，0卡顿！
+    if _cached_path != "":
+        var cached_popup = get_node_or_null(_cached_path)
+        if cached_popup != null and not _processed.has(cached_popup):
+            _wrap_description(cached_popup)
+            return
+
+    # 2. 如果没找到过，或者节点变了，才去扫描。只扫 UI 层！
+    var popups = _find_popups_fast(get_tree().root)
     for popup in popups:
         if not is_instance_valid(popup) or _processed.has(popup):
             continue
         _wrap_description(popup)
 
 func _wrap_description(popup_root: Node):
-    # 找高度最长的那个节点（包含词条的容器）
     var target_node = _find_tallest_node(popup_root)
     if target_node == null:
         return
@@ -41,7 +48,6 @@ func _wrap_description(popup_root: Node):
     scroll.scroll_horizontal_enabled = false
     scroll.scroll_vertical_enabled = true
     
-    # 关键：允许触摸滑动
     scroll.mouse_filter = Control.MOUSE_FILTER_PASS
 
     parent.add_child(scroll)
@@ -52,8 +58,10 @@ func _wrap_description(popup_root: Node):
         target_node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
     _processed[popup_root] = true
+    
+    # 核心优化：记住这个弹窗的绝对路径！下次直接找它！
+    _cached_path = popup_root.get_path()
 
-# 专门找高度超过 300 的大容器，不管它叫什么名字
 func _find_tallest_node(root: Node) -> Node:
     var best = null
     var max_height = 0
@@ -68,10 +76,15 @@ func _find_tallest_node(root: Node) -> Node:
             stack.push_back(child)
     return best
 
-func _find_popups(root: Node) -> Array:
+# 优化扫描：跳过名字带 "Game" 或者 "Entities" 的怪物节点，只找 UI
+func _find_popups_fast(root: Node) -> Array:
     var result = []
+    # 避开游戏世界实体，极大减少扫描量
+    if "entity" in root.name.to_lower() or "game" in root.name.to_lower() or "map" in root.name.to_lower():
+        return result
+        
     if "popup" in root.name.to_lower() or "description" in root.name.to_lower():
         result.append(root)
     for child in root.get_children():
-        result.append_array(_find_popups(child))
+        result.append_array(_find_popups_fast(child))
     return result
