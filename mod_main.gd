@@ -4,12 +4,12 @@ var _processed = {}
 var _status_label: Label
 
 func _ready():
+    # 右上角指示灯
     var canvas = CanvasLayer.new()
     canvas.layer = 100
     add_child(canvas)
-    
     _status_label = Label.new()
-    _status_label.text = "模组运行中 (精准套壳)"
+    _status_label.text = "✅ 模组运行中 (直接限高)"
     _status_label.add_color_override("font_color", Color(0, 1, 0))
     _status_label.add_color_override("font_outline_color", Color(0, 0, 0))
     _status_label.add_constant_override("outline_size", 4)
@@ -25,14 +25,11 @@ func _ready():
     get_tree().connect("node_added", self, "_on_node_added")
 
 func _on_node_added(node: Node):
-    # 名字不对直接滚
     if node.name != "ItemDescription":
         return
         
-    var path = str(node.get_path())
-    
-    # 绝对不碰商店！只要不是 WeaponSelection，直接放行！
-    if "WeaponSelection" not in path:
+    # 只要场景里有 WeaponSelection 根节点，就说明是宝箱
+    if get_node_or_null("/root/WeaponSelection") == null:
         return
         
     if _processed.has(node):
@@ -40,54 +37,22 @@ func _on_node_added(node: Node):
         
     _processed[node] = true
     
-    # 等两帧，让引擎算好它的初始大小和位置
+    # 等两帧，等 UI 彻底排版完毕，再砍它！
     yield(get_tree(), "idle_frame")
     yield(get_tree(), "idle_frame")
     
     if is_instance_valid(node):
-        _wrap_it_safely(node)
+        _force_limit_height(node)
 
-func _wrap_it_safely(item_node: Node):
-    var parent = item_node.get_parent()
-    if not parent or parent is ScrollContainer:
-        return
-        
-    # 记录它此时此刻的真实位置和大小
-    var index = item_node.get_index()
-    var orig_size = item_node.rect_size
-    var orig_pos = item_node.rect_position
+func _force_limit_height(item_node: Control):
+    # 强制把高度砍到 320（你可以自己改这个数值）
+    var limit_h = 320.0 
     
-    # 拔出来
-    parent.remove_child(item_node)
+    item_node.rect_min_size.y = limit_h
+    item_node.rect_size.y = limit_h
     
-    # 造一个新外壳
-    var scroll = ScrollContainer.new()
-    scroll.name = "ModTooltipScroll"
+    # 关键防御：禁止这个框被父节点自动拉伸
+    item_node.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
     
-    # 继承原来的一切
-    scroll.rect_size = orig_size
-    scroll.rect_position = orig_pos
-    scroll.scroll_horizontal_enabled = false
-    scroll.scroll_vertical_enabled = true
-    scroll.mouse_filter = Control.MOUSE_FILTER_PASS
-    
-    # 关键限制：高度如果超过屏幕的一半，就强制砍断
-    var max_h = get_viewport().size.y * 0.5
-    if scroll.rect_size.y > max_h:
-        scroll.rect_size.y = max_h
-        scroll.rect_min_size.y = max_h
-    
-    # 把新外壳塞回原位
-    parent.add_child(scroll)
-    parent.move_child(scroll, index)
-    
-    # 把原框塞进新外壳里
-    scroll.add_child(item_node)
-    
-    # 修正原框在壳里的位置，让它铺满
-    if item_node is Control:
-        item_node.rect_position = Vector2(0, 0)
-        item_node.rect_min_size.x = scroll.rect_size.x
-        
     if is_instance_valid(_status_label):
-        _status_label.text = "成功包裹宝箱框"
+        _status_label.text = "✅ 已直接切断宝箱框高度!"
