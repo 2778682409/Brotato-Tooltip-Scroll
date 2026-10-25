@@ -1,0 +1,17 @@
+{
+  "name": "TooltipScroll",
+  "namespace": "yuan",
+  "version_number": "1.0.0",
+  "description": "为宝箱物品描述框添加滚动条，防止词条过多时超出屏幕。",
+  "website_url": "https://github.com/2778682409/Brotato-Tooltip-Scroll",
+  "dependencies": [],
+  "extra": {
+    "godot": {
+      "incompatibilities": [],
+      "authors": ["yuan"],
+      "compatible_mod_loader_version": ["6.0.0"],
+      "compatible_game_version": ["1.1.15.4"],
+      "config_defaults": {}
+    }
+  }
+}
