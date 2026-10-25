@@ -5,7 +5,7 @@ var _known_popups = {}
 
 func _ready():
     var timer = Timer.new()
-    timer.wait_time = 0.5
+    timer.wait_time = 1.0 # 1秒扫一次，绝对不卡
     timer.autostart = true
     timer.connect("timeout", self, "_scan_for_popups")
     add_child(timer)
@@ -22,8 +22,8 @@ func _scan_for_popups():
         _wrap_description(popup)
 
 func _wrap_description(popup_root: Node):
-    # 只找纯文本节点，不找容器
-    var target_node = _find_longest_text(popup_root)
+    # 恢复抓取“高度大于250的大容器”逻辑（宝箱完美生效的版本）
+    var target_node = _find_tallest_node(popup_root)
     if target_node == null:
         return
 
@@ -42,7 +42,6 @@ func _wrap_description(popup_root: Node):
     scroll.rect_min_size = Vector2(max_width, max_height)
     scroll.scroll_horizontal_enabled = false
     scroll.scroll_vertical_enabled = true
-    
     scroll.mouse_filter = Control.MOUSE_FILTER_PASS
 
     parent.add_child(scroll)
@@ -55,34 +54,36 @@ func _wrap_description(popup_root: Node):
     _processed[popup_root] = true
     _known_popups[popup_root] = true
 
-# 精准抓取文本：只找 Label 或 RichTextLabel，且字数必须超过 20 个字
-func _find_longest_text(root: Node) -> Node:
+func _find_tallest_node(root: Node) -> Node:
     var best = null
-    var best_len = 0
+    var max_height = 0
     var stack = [root]
     while stack.size() > 0:
         var node = stack.pop_back()
-        if node is RichTextLabel or node is Label:
-            var text_len = node.text.length() if "text" in node else 0
-            if text_len > best_len:
-                best_len = text_len
+        if node is Control:
+            if node.rect_size.y > max_height and node.rect_size.y > 250:
+                max_height = node.rect_size.y
                 best = node
         for child in node.get_children():
             stack.push_back(child)
-            
-    if best_len < 20:
-        return null
     return best
 
-# 严格匹配弹窗名字，绝不让商店卡片混进来
 func _find_popups_fast(root: Node) -> Array:
     var result = []
     var r_name = root.name.to_lower()
     
-    # 只认这三个精准的名字
-    if "item_popup" in r_name or "item_description" in r_name or "tooltip" in r_name:
+    # ⚠️ 核心防误伤：只要名字里带 shop，直接跳过整个节点及其子节点！
+    if "shop" in r_name:
+        return result
+        
+    # 名字条件放宽，确保宝箱能被抓到
+    if "pop" in r_name or "desc" in r_name or "tooltip" in r_name:
         result.append(root)
         
-    for child in root.get_children():
+    for child in node_children(root):
         result.append_array(_find_popups_fast(child))
     return result
+
+# 辅助函数，兼容不同Godot版本的获取子节点方法
+func node_children(node: Node) -> Array:
+    return node.get_children()
