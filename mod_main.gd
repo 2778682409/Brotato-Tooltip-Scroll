@@ -3,84 +3,109 @@ extends Node
 var _processed = {}
 
 func _ready():
-    # 1. 监听后续生成的 UI（比如设置界面、宝箱）
-    get_tree().connect("node_added", self, "_on_node_added")
+    # 💥 存活指示灯：如果游戏左上角没出现这行绿字，说明模组根本没加载！
+    _add_debug_label("✅ 终极滑动补丁已加载")
     
-    # 2. 延迟一帧，扫描一遍游戏启动时已经存在的主界面 Mod 列表
-    call_deferred("_scan_initial_ui")
+    # 延迟扫描主界面的 Mod 列表
+    call_deferred("_scan_all_scrolls")
+    
+    # 监听后续生成的 UI
+    get_tree().connect("node_added", self, "_on_node_added")
 
-# 只处理两件事：开关变透明，宝箱限高
+func _add_debug_label(text: String):
+    var canvas = CanvasLayer.new()
+    canvas.layer = 100
+    add_child(canvas)
+    var label = Label.new()
+    label.text = text
+    label.add_color_override("font_color", Color(0, 1, 0))
+    label.add_color_override("font_outline_color", Color(0, 0, 0))
+    label.add_constant_override("outline_size", 4)
+    label.rect_position = Vector2(20, 20)
+    canvas.add_child(label)
+
+func _scan_all_scrolls():
+    # 解决主界面列表滑不动：开局把所有 ScrollContainer 都找出来挂上滑动
+    var all_scrolls = get_tree().root.find_children("*", "ScrollContainer", true, false)
+    for s in all_scrolls:
+        _setup_scroll(s)
+
 func _on_node_added(node: Node):
-    # 处理开关
-    if node is CheckButton:
-        _make_button_slideable(node)
-        return
-
-    # 处理宝箱物品描述
+    # 1. 宝箱限高
     if node.name == "ItemDescription":
         if _processed.has(node): return
         _processed[node] = true
-        call_deferred("_process_item_description", node)
+        yield(get_tree(), "idle_frame")
+        yield(get_tree(), "idle_frame")
+        if is_instance_valid(node):
+            if "Shop" not in str(node.get_path()):
+                _wrap_and_lock_crate(node)
+        return
+        
+    # 2. 其他新生成的滚动框
+    if node is ScrollContainer:
+        if _processed.has(node): return
+        _processed[node] = true
+        yield(get_tree(), "idle_frame")
+        if is_instance_valid(node):
+            _setup_scroll(node)
 
-func _scan_initial_ui():
-    # 把一开始就在树里的开关全抓出来处理掉
-    var all_btns = get_tree().root.find_children("*", "CheckButton", true, false)
-    for btn in all_btns:
-        _make_button_slideable(btn)
-
-# 核心：让开关变透明，允许事件穿透给底下的滚动框
-func _make_button_slideable(btn: CheckButton):
-    if btn.has_meta("mod_slide_fixed"): return
-    btn.set_meta("mod_slide_fixed", true)
+# ============ 核心配置 ============
+func _setup_scroll(scroll: ScrollContainer):
+    # 让滚动框接收触摸
+    scroll.mouse_filter = Control.MOUSE_FILTER_PASS
     
-    # 允许滑动事件穿透
-    btn.mouse_filter = Control.MOUSE_FILTER_PASS
-    
-    # 抄作业：干掉黑色大背景
-    var empty_style = StyleBoxEmpty.new()
-    btn.add_stylebox_override("normal", empty_style)
-    btn.add_stylebox_override("pressed", empty_style)
-    btn.add_stylebox_override("focus", empty_style)
-    btn.add_stylebox_override("disabled", empty_style)
+    # 找出所有的开关（CheckButton）
+    var buttons = scroll.find_children("*", "CheckButton", true, false)
+    for btn in buttons:
+        # 抄补丁作者的作业：干掉黑框，允许穿透
+        var empty_style = StyleBoxEmpty.new()
+        btn.add_stylebox_override("normal", empty_style)
+        btn.add_stylebox_override("pressed", empty_style)
+        btn.add_stylebox_override("focus", empty_style)
+        btn.add_stylebox_override("disabled", empty_style)
+        
+        # 必须给 PASS，否则滑动事件下传不了
+        btn.mouse_filter = Control.MOUSE_FILTER_PASS
+        
+        # 修复误触：直接挂上咱们自己的事件监听，如果滑动，就吃掉事件，不让按钮点击
+        if not btn.is_connected("gui_input", self, "_on_btn_gui_input"):
+            btn.connect("gui_input", self, "_on_btn_gui_input", [scroll, btn])
 
-# 处理宝箱限高
-func _process_item_description(node: Node):
-    yield(get_tree(), "idle_frame")
-    yield(get_tree(), "idle_frame")
-    if not is_instance_valid(node): return
-    
-    var path = str(node.get_path())
-    # 只处理不是商店的（宝箱、升级）
-    if "Shop" not in path:
-        _wrap_and_lock_crate(node)
+# 处理误触：当在按钮上拖动时，取消点击
+func _on_btn_gui_input(event: InputEvent, scroll: ScrollContainer, btn: CheckButton):
+    if event is InputEventScreenDrag:
+        # 强行滚动
+        scroll.scroll_vertical -= event.relative.y
+        # 取消掉按钮的按下状态，这样松手时就不会触发 toggle 了
+        if btn.pressed:
+            btn.pressed = true 
+        else:
+            btn.pressed = false
+        scroll.accept_event()
 
+# ============ 宝箱限高 ============
 func _wrap_and_lock_crate(popup_root: Control):
     var parent = popup_root.get_parent()
-    if not parent or parent is ScrollContainer:
-        return
-
+    if not parent or parent is ScrollContainer: return
     var index = popup_root.get_index()
     var orig_pos = popup_root.rect_position
     var orig_width = popup_root.rect_size.x
-    
     parent.remove_child(popup_root)
-
     var scroll = ScrollContainer.new()
     scroll.name = "ModTooltipScroll"
     var fixed_height = 400.0
-    
     scroll.rect_position = orig_pos
     scroll.rect_min_size = Vector2(orig_width, fixed_height)
     scroll.rect_size = Vector2(orig_width, fixed_height)
     scroll.scroll_horizontal_enabled = false
     scroll.scroll_vertical_enabled = true
     scroll.clip_contents = true
-
     parent.add_child(scroll)
     parent.move_child(scroll, index)
     scroll.add_child(popup_root)
-    
     if popup_root is Control:
         popup_root.rect_position = Vector2(0, 0)
         popup_root.rect_min_size.x = orig_width
         popup_root.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+    _setup_scroll(scroll)
