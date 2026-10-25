@@ -1,13 +1,12 @@
 extends Node
 
-# 使用字典替代 set()，完美兼容 Godot 3.5
 var _processed = {}
 
 func _ready():
     get_tree().connect("node_added", self, "_on_node_added")
 
 func _on_node_added(node: Node):
-    # 1. 处理物品描述框
+    # 1. 处理宝箱的限高套壳
     if node.name == "ItemDescription":
         if _processed.has(node):
             return
@@ -18,26 +17,17 @@ func _on_node_added(node: Node):
         
         if is_instance_valid(node):
             var path = str(node.get_path())
-            if "Shop" in path:
-                var scrolls = _find_all_scrolls(node)
-                for scroll in scrolls:
-                    _setup_touch_scroll(scroll)
-            else:
+            if "Shop" not in path:
                 _wrap_and_lock_crate(node)
         return
-
-    # 2. 处理其他所有滚动框（设置界面等）
+        
+    # 2. 把滚动框里的文字全部变透明，防止它们拦截触摸
     if node is ScrollContainer:
-        if _processed.has(node):
-            return
-        _processed[node] = true
-        
         yield(get_tree(), "idle_frame")
-        
         if is_instance_valid(node):
-            _setup_touch_scroll(node)
+            _set_mouse_ignore_for_text(node)
 
-# ============ 宝箱专用：套壳限高 ============
+# ============ 宝箱限高 ============
 func _wrap_and_lock_crate(popup_root: Control):
     var parent = popup_root.get_parent()
     if not parent or parent is ScrollContainer:
@@ -69,40 +59,30 @@ func _wrap_and_lock_crate(popup_root: Control):
         popup_root.rect_min_size.x = orig_width
         popup_root.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
         
-    _setup_touch_scroll(scroll)
-
-# ============ 核心：给滚动框注入触屏滑动 ============
-func _setup_touch_scroll(scroll: ScrollContainer):
-    # 确保滚动框接收触摸
-    scroll.mouse_filter = Control.MOUSE_FILTER_PASS
-    
-    # 递归让文本和图标无视触摸
     _set_mouse_ignore_for_text(scroll)
-        
-    if not scroll.is_connected("gui_input", self, "_on_scroll_gui_input"):
-        scroll.connect("gui_input", self, "_on_scroll_gui_input", [scroll])
 
-# 递归寻找内部 ScrollContainer
-func _find_all_scrolls(root: Node) -> Array:
-    var result = []
-    if root is ScrollContainer:
-        result.append(root)
-    for child in root.get_children():
-        result.append_array(_find_all_scrolls(child))
-    return result
-
-# 只让纯文本和图片忽略触摸，保留按钮
+# 只让纯文本和图片忽略触摸，保留按钮的点击功能
 func _set_mouse_ignore_for_text(node: Node):
     for child in node.get_children():
         if child is Label or child is RichTextLabel or child is TextureRect:
             child.mouse_filter = Control.MOUSE_FILTER_IGNORE
         _set_mouse_ignore_for_text(child)
 
-# 相对位移滑动
-func _on_scroll_gui_input(event: InputEvent, scroll: ScrollContainer):
+# ============ 核心魔法：只要滑，就全部滚！ ============
+func _input(event: InputEvent):
+    # 监听手机手指拖拽
     if event is InputEventScreenDrag:
-        scroll.scroll_vertical -= event.relative.y
-        scroll.accept_event()
-    elif event is InputEventMouseMotion and event.button_mask & BUTTON_MASK_LEFT:
-        scroll.scroll_vertical -= event.relative.y
-        scroll.accept_event()
+        var handled = false
+        
+        # 暴力找出当前场景树里所有的滚动框
+        var all_scrolls = get_tree().root.find_children("*", "ScrollContainer", true, false)
+        
+        for scroll in all_scrolls:
+            # 只要它在屏幕上露出来了，直接给它滚！
+            if is_instance_valid(scroll) and scroll.is_visible_in_tree():
+                scroll.scroll_vertical -= event.relative.y
+                handled = true
+                
+        # 如果成功滚动了，就吃掉这个事件，防止底层界面误触
+        if handled:
+            get_tree().set_input_as_handled()
