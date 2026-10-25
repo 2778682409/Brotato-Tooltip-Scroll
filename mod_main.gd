@@ -1,6 +1,10 @@
 extends Node
 
 var _processed = {}
+# 用于记录拖拽状态的变量
+var _drag_active = false
+var _drag_start_y = 0.0
+var _drag_start_scroll = 0.0
 
 func _ready():
     get_tree().connect("node_added", self, "_on_node_added")
@@ -9,35 +13,27 @@ func _on_node_added(node: Node):
     if node.name != "ItemDescription":
         return
         
-    var path = str(node.get_path())
     if _processed.has(node):
         return
         
     _processed[node] = true
     
-    # 等两帧，让 UI 彻底排版出来
+    # 等两帧，等 UI 彻底排版出来
     yield(get_tree(), "idle_frame")
     yield(get_tree(), "idle_frame")
     
     if is_instance_valid(node):
+        var path = str(node.get_path())
         if "Shop" in path:
-            _fix_shop_scroll(node)
+            # 商店：不改变大小，只把所有内部的滚动条都装上“触屏补丁”
+            var scrolls = _find_all_scrolls(node)
+            for scroll in scrolls:
+                _setup_touch_scroll(scroll)
         else:
+            # 宝箱：套壳限高 + 触屏补丁
             _wrap_and_lock_crate(node)
 
-# ============ 商店专用：只加滑动，不改尺寸 ============
-func _fix_shop_scroll(item_node: Node):
-    var scroll = item_node.find_node("ScrollContainer", true, false)
-    if not scroll: return
-    
-    # 1. 让里面的所有文字和图标忽略触摸，把事件让给滚动条
-    _disable_mouse_in_children(scroll)
-    
-    # 2. 给滚动条接上手指滑动逻辑（防止重复连接）
-    if not scroll.is_connected("gui_input", self, "_on_scroll_drag"):
-        scroll.connect("gui_input", self, "_on_scroll_drag", [scroll])
-
-# ============ 宝箱专用：套壳锁死 + 支持滑动 ============
+# ============ 宝箱套壳逻辑 ============
 func _wrap_and_lock_crate(popup_root: Control):
     var parent = popup_root.get_parent()
     if not parent or parent is ScrollContainer:
@@ -58,7 +54,6 @@ func _wrap_and_lock_crate(popup_root: Control):
     scroll.rect_size = Vector2(orig_width, fixed_height)
     scroll.scroll_horizontal_enabled = false
     scroll.scroll_vertical_enabled = true
-    scroll.mouse_filter = Control.MOUSE_FILTER_PASS
     scroll.clip_contents = true
 
     parent.add_child(scroll)
@@ -70,24 +65,48 @@ func _wrap_and_lock_crate(popup_root: Control):
         popup_root.rect_min_size.x = orig_width
         popup_root.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
         
-    # 让里面的文字不拦截触摸，并加上拖拽手势
-    _disable_mouse_in_children(scroll)
-    scroll.connect("gui_input", self, "_on_scroll_drag", [scroll])
+    _setup_touch_scroll(scroll)
 
-# 核心工具：让所有文字节点无视鼠标/触摸
-func _disable_mouse_in_children(node: Node):
+# ============ 核心：给滚动框注入触屏滑动 ============
+func _setup_touch_scroll(scroll: ScrollContainer):
+    # 确保滚动框自己能接收触摸事件
+    scroll.mouse_filter = Control.MOUSE_FILTER_PASS
+    
+    # 把里面所有的文字、容器全部设置成“无视触摸”，这样手指划在字上，就等于划在框上
+    for child in scroll.get_children():
+        _set_mouse_ignore(child)
+        
+    # 监听手指的滑动事件
+    if not scroll.is_connected("gui_input", self, "_on_scroll_gui_input"):
+        scroll.connect("gui_input", self, "_on_scroll_gui_input", [scroll])
+
+# 递归寻找所有 ScrollContainer
+func _find_all_scrolls(root: Node) -> Array:
+    var result = []
+    if root is ScrollContainer:
+        result.append(root)
+    for child in root.get_children():
+        result.append_array(_find_all_scrolls(child))
+    return result
+
+# 递归无视触摸（保留滚动条本身响应）
+func _set_mouse_ignore(node: Node):
     for child in node.get_children():
-        if child is Label or child is RichTextLabel or child is TextureRect:
+        if child is Control and not (child is VScrollBar or child is HScrollBar):
             child.mouse_filter = Control.MOUSE_FILTER_IGNORE
-        _disable_mouse_in_children(child)
+            _set_mouse_ignore(child)
 
-# 核心工具：手指上下滑动，直接控制滚动条
-func _on_scroll_drag(event: InputEvent, scroll: ScrollContainer):
-    # 监听手机手指拖拽事件
-    if event is InputEventScreenDrag:
-        scroll.scroll_vertical -= event.relative.y
-        scroll.accept_event() # 告诉引擎：我处理了这个事件，别往下传了
-    # 顺便兼容一下如果你接了鼠标玩
-    elif event is InputEventMouseMotion and event.button_mask & BUTTON_MASK_LEFT:
-        scroll.scroll_vertical -= event.relative.y
+# 模拟手指滑动
+func _on_scroll_gui_input(event: InputEvent, scroll: ScrollContainer):
+    if event is InputEventScreenTouch:
+        if event.pressed:
+            _drag_active = true
+            _drag_start_y = event.position.y
+            _drag_start_scroll = scroll.scroll_vertical
+            scroll.accept_event()
+        else:
+            _drag_active = false
+    elif event is InputEventScreenDrag and _drag_active:
+        var diff = event.position.y - _drag_start_y
+        scroll.scroll_vertical = _drag_start_scroll - diff
         scroll.accept_event()
