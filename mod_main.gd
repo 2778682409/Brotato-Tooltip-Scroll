@@ -1,25 +1,20 @@
 extends Node
 
 var _processed = {}
-var _scan_timer = 0.0
-var _cached_path: NodePath = "" # 记住成功找到的路径，下次直接瞬移过去
+var _known_popups = {}
 
 func _ready():
     var timer = Timer.new()
-    timer.wait_time = 1.0 # 降低频率，1秒扫一次就够了
+    timer.wait_time = 0.5
     timer.autostart = true
     timer.connect("timeout", self, "_scan_for_popups")
     add_child(timer)
 
 func _scan_for_popups():
-    # 1. 如果已经记住了路径，直接去那个路径找，0卡顿！
-    if _cached_path != "":
-        var cached_popup = get_node_or_null(_cached_path)
-        if cached_popup != null and not _processed.has(cached_popup):
-            _wrap_description(cached_popup)
-            return
-
-    # 2. 如果没找到过，或者节点变了，才去扫描。只扫 UI 层！
+    for popup in _known_popups.keys():
+        if is_instance_valid(popup) and not _processed.has(popup):
+            _wrap_description(popup)
+            
     var popups = _find_popups_fast(get_tree().root)
     for popup in popups:
         if not is_instance_valid(popup) or _processed.has(popup):
@@ -27,7 +22,8 @@ func _scan_for_popups():
         _wrap_description(popup)
 
 func _wrap_description(popup_root: Node):
-    var target_node = _find_tallest_node(popup_root)
+    # 只找纯文本节点，不找容器
+    var target_node = _find_longest_text(popup_root)
     if target_node == null:
         return
 
@@ -41,7 +37,6 @@ func _wrap_description(popup_root: Node):
     var scroll = ScrollContainer.new()
     scroll.name = "ModTooltipScroll"
     
-    # 锁定高度为屏幕的 45%
     var max_height = get_viewport().size.y * 0.45
     var max_width = parent.rect_size.x if parent.rect_size.x > 0 else 400
     scroll.rect_min_size = Vector2(max_width, max_height)
@@ -58,33 +53,36 @@ func _wrap_description(popup_root: Node):
         target_node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
     _processed[popup_root] = true
-    
-    # 核心优化：记住这个弹窗的绝对路径！下次直接找它！
-    _cached_path = popup_root.get_path()
+    _known_popups[popup_root] = true
 
-func _find_tallest_node(root: Node) -> Node:
+# 精准抓取文本：只找 Label 或 RichTextLabel，且字数必须超过 20 个字
+func _find_longest_text(root: Node) -> Node:
     var best = null
-    var max_height = 0
+    var best_len = 0
     var stack = [root]
     while stack.size() > 0:
         var node = stack.pop_back()
-        if node is Control:
-            if node.rect_size.y > max_height and node.rect_size.y > 300:
-                max_height = node.rect_size.y
+        if node is RichTextLabel or node is Label:
+            var text_len = node.text.length() if "text" in node else 0
+            if text_len > best_len:
+                best_len = text_len
                 best = node
         for child in node.get_children():
             stack.push_back(child)
+            
+    if best_len < 20:
+        return null
     return best
 
-# 优化扫描：跳过名字带 "Game" 或者 "Entities" 的怪物节点，只找 UI
+# 严格匹配弹窗名字，绝不让商店卡片混进来
 func _find_popups_fast(root: Node) -> Array:
     var result = []
-    # 避开游戏世界实体，极大减少扫描量
-    if "entity" in root.name.to_lower() or "game" in root.name.to_lower() or "map" in root.name.to_lower():
-        return result
-        
-    if "popup" in root.name.to_lower() or "description" in root.name.to_lower():
+    var r_name = root.name.to_lower()
+    
+    # 只认这三个精准的名字
+    if "item_popup" in r_name or "item_description" in r_name or "tooltip" in r_name:
         result.append(root)
+        
     for child in root.get_children():
         result.append_array(_find_popups_fast(child))
     return result
