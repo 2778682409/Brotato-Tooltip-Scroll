@@ -3,84 +3,104 @@ extends Node
 var _processed = {}
 
 func _ready():
+    # 进游戏给个指示灯，证明它活着
+    var canvas = CanvasLayer.new()
+    canvas.layer = 100
+    add_child(canvas)
+    var label = Label.new()
+    label.text = "✅ 终极原生滑动已加载"
+    label.add_color_override("font_color", Color(0, 1, 0))
+    label.add_color_override("font_outline_color", Color(0, 0, 0))
+    label.add_constant_override("outline_size", 4)
+    label.rect_position = Vector2(20, 20)
+    canvas.add_child(label)
+    
+    # 监听新生成的界面
     get_tree().connect("node_added", self, "_on_node_added")
-    call_deferred("_scan_initial_ui")
+    # 启动时主动扫描一遍已有的主界面列表
+    call_deferred("_scan_existing_scrolls")
 
-# 扫描一遍游戏启动时已经存在的 UI
-func _scan_initial_ui():
-    var all_btns = get_tree().root.find_children("*", "CheckButton", true, false)
-    for btn in all_btns:
-        _make_button_pass(btn)
+func _scan_existing_scrolls():
+    var all_scrolls = get_tree().root.find_children("*", "ScrollContainer", true, false)
+    for s in all_scrolls:
+        _setup_native_scroll(s)
 
 func _on_node_added(node: Node):
-    # 1. 处理开关（去掉黑框，允许事件穿透）
-    if node is CheckButton:
-        _make_button_pass(node)
-        return
-
-    # 2. 处理宝箱限高（绝对不碰商店）
     if node.name == "ItemDescription":
         if _processed.has(node): return
         _processed[node] = true
-        call_deferred("_process_item_description", node)
+        yield(get_tree(), "idle_frame")
+        yield(get_tree(), "idle_frame")
+        if is_instance_valid(node):
+            if "Shop" not in str(node.get_path()):
+                _wrap_and_lock_crate(node)
+        return
+        
+    if node is ScrollContainer:
+        if _processed.has(node): return
+        _processed[node] = true
+        _setup_native_scroll(node)
 
-# 核心：干掉大黑框，让事件能传给原生滚动条
-func _make_button_pass(btn: CheckButton):
-    if btn.has_meta("mod_slide_fixed"): return
-    btn.set_meta("mod_slide_fixed", true)
-    
-    # 允许事件传给底层的 ScrollContainer
-    btn.mouse_filter = Control.MOUSE_FILTER_PASS
-    
-    # 抄补丁作者的绝招：干掉黑色大背景
-    var empty_style = StyleBoxEmpty.new()
-    btn.add_stylebox_override("normal", empty_style)
-    btn.add_stylebox_override("pressed", empty_style)
-    btn.add_stylebox_override("focus", empty_style)
-    btn.add_stylebox_override("disabled", empty_style)
-    
-    # 连接鼠标悬停高亮（补丁作者连这个都做了）
-    var hover_style = btn.get_stylebox("hover")
-    if hover_style != null:
-        btn.add_stylebox_override("hover_pressed", hover_style)
-        btn.connect("mouse_entered", self, "_on_btn_entered", [btn, hover_style])
-        btn.connect("mouse_exited", self, "_on_btn_exited", [btn, empty_style])
+# ============ 核心：全量打通事件，交给原生引擎！ ============
+func _setup_native_scroll(scroll: ScrollContainer):
+    if not is_instance_valid(scroll): return
+    # 确保滚动框自己完全接管触摸
+    scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+    _process_children(scroll)
 
-func _on_btn_entered(btn: CheckButton, hover_style: StyleBox):
-    if btn.pressed:
-        btn.add_stylebox_override("pressed", hover_style)
+func _process_children(node: Node):
+    for child in node.get_children():
+        if child is Control:
+            # 1. 文字和图片直接设为透明（无视触摸）
+            if child is Label or child is RichTextLabel or child is TextureRect:
+                child.mouse_filter = Control.MOUSE_FILTER_IGNORE
+                
+            # 2. 滚动条自己保留
+            elif child is ScrollBar:
+                pass
+                
+            # 3. 按钮和【所有容器】全部设为 PASS，让事件能穿透到底层！
+            else:
+                child.mouse_filter = Control.MOUSE_FILTER_PASS
+                
+            # 如果是开关，干掉它丑陋的大黑框
+            if child is CheckButton:
+                var empty_style = StyleBoxEmpty.new()
+                child.add_stylebox_override("normal", empty_style)
+                child.add_stylebox_override("pressed", empty_style)
+                child.add_stylebox_override("focus", empty_style)
+                child.add_stylebox_override("disabled", empty_style)
 
-func _on_btn_exited(btn: CheckButton, empty_style: StyleBox):
-    btn.add_stylebox_override("pressed", empty_style)
+            _process_children(child)
 
-# ============ 宝箱限高 ============
-func _process_item_description(node: Node):
-    yield(get_tree(), "idle_frame")
-    yield(get_tree(), "idle_frame")
-    if not is_instance_valid(node): return
-    if "Shop" not in str(node.get_path()):
-        _wrap_and_lock_crate(node)
-
+# ============ 宝箱套壳限高 ============
 func _wrap_and_lock_crate(popup_root: Control):
     var parent = popup_root.get_parent()
     if not parent or parent is ScrollContainer: return
+
     var index = popup_root.get_index()
     var orig_pos = popup_root.rect_position
     var orig_width = popup_root.rect_size.x
+    
     parent.remove_child(popup_root)
     var scroll = ScrollContainer.new()
     scroll.name = "ModTooltipScroll"
     var fixed_height = 400.0
+    
     scroll.rect_position = orig_pos
     scroll.rect_min_size = Vector2(orig_width, fixed_height)
     scroll.rect_size = Vector2(orig_width, fixed_height)
     scroll.scroll_horizontal_enabled = false
     scroll.scroll_vertical_enabled = true
     scroll.clip_contents = true
+
     parent.add_child(scroll)
     parent.move_child(scroll, index)
     scroll.add_child(popup_root)
+    
     if popup_root is Control:
         popup_root.rect_position = Vector2(0, 0)
         popup_root.rect_min_size.x = orig_width
         popup_root.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+        
+    _setup_native_scroll(scroll)
