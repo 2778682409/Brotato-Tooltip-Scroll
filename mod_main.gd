@@ -1,66 +1,64 @@
 extends Node
 
-var _timer: Timer
-var _processed = []
+var _processed = {}
 var _status_label: Label
 
 func _ready():
-    # 右上角指示灯
+    # 1. 设置右上角状态指示灯
     var canvas = CanvasLayer.new()
     canvas.layer = 100
     add_child(canvas)
+    
     _status_label = Label.new()
-    _status_label.text = "✅ 模组已运行 (修剪模式)"
+    _status_label.text = "✅ 模组已运行 (监听模式)"
     _status_label.add_color_override("font_color", Color(0, 1, 0))
     _status_label.add_color_override("font_outline_color", Color(0, 0, 0))
     _status_label.add_constant_override("outline_size", 4)
     _status_label.anchor_left = 1.0
     _status_label.anchor_right = 1.0
-    _status_label.margin_left = -250
+    _status_label.margin_left = -300
     _status_label.margin_right = -20
     _status_label.margin_top = 20
     _status_label.align = Label.ALIGN_RIGHT
     canvas.add_child(_status_label)
 
-    _timer = Timer.new()
-    _timer.wait_time = 0.5
-    _timer.autostart = true
-    _timer.connect("timeout", self, "_trim_scroll")
-    add_child(_timer)
+    # 2. 连接核心信号：只要场景树有新节点诞生，就通知我们
+    get_tree().connect("node_added", self, "_on_node_added")
 
-func _trim_scroll():
-    var targets = _find_nodes_by_name(get_tree().root, "ItemDescription")
-    
-    for target in targets:
-        if target in _processed: continue
-        var path = str(target.get_path())
+func _on_node_added(node: Node):
+    # 引擎每秒会生成无数节点（子弹、怪物等），咱们用最快的速度过滤
+    if node.name != "ItemDescription":
+        return
         
-        # 绝对不碰商店，商店原版就是完美的
-        if "Shop" in path:
-            continue
-            
-        # 找到它里面的原生滚动条
-        var scroll = target.find_node("ScrollContainer", true, false)
-        if scroll:
-            _processed.append(target)
-            
-            # 设定一个安全高度（比如 350 像素，可以根据你手机屏幕自己调）
-            var safe_height = 350.0
-            
-            # 只有当内容高度超过安全高度时，才去限制它
-            var inner_vbox = scroll.get_child(0)
-            if inner_vbox and inner_vbox.rect_size.y > safe_height:
-                scroll.rect_min_size = Vector2(scroll.rect_size.x, safe_height)
-                scroll.rect_size = Vector2(scroll.rect_size.x, safe_height)
-                scroll.scroll_vertical_enabled = true
-                
-                if is_instance_valid(_status_label):
-                    _status_label.text = "✅ 已成功折叠超长词条！"
+    var path = str(node.get_path())
+    
+    # 精准判定：必须是宝箱/选武器界面 (WeaponSelection)
+    if "WeaponSelection" not in path:
+        return
+        
+    if _processed.has(node):
+        return
+        
+    _processed[node] = true
+    
+    # 刚刚出生的节点，UI 还没排版好，等一帧再动手
+    yield(get_tree(), "idle_frame")
+    
+    if is_instance_valid(node):
+        _fix_the_box(node)
 
-func _find_nodes_by_name(root: Node, target_name: String) -> Array:
-    var result = []
-    if root.name == target_name:
-        result.append(root)
-    for child in root.get_children():
-        result.append_array(_find_nodes_by_name(child, target_name))
-    return result
+func _fix_the_box(item_node: Node):
+    # 在刚诞生的 ItemDescription 里找自带的滚动条
+    var scroll = item_node.find_node("ScrollContainer", true, false)
+    
+    if scroll:
+        # 直接写死尺寸，完全照抄商店的 321 x 265
+        scroll.rect_min_size = Vector2(321, 265)
+        scroll.rect_size = Vector2(321, 265)
+        
+        # 关键：把垂直扩展关掉，防止被外面的父节点撑大
+        scroll.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+        scroll.scroll_vertical_enabled = true
+        
+        if is_instance_valid(_status_label):
+            _status_label.text = "✅ 已锁定宝箱物品框尺寸!"
