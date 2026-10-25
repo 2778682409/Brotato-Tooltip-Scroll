@@ -2,17 +2,11 @@ extends Node
 
 var _processed = {}
 
-# 触摸滑动判定变量
-var _touch_start_pos = Vector2.ZERO
-var _is_dragging = false
-var _active_scroll = null
-const DRAG_THRESHOLD = 15.0 # 滑动阈值：超过 15 像素才算滑动，防止误触开关
-
 func _ready():
     get_tree().connect("node_added", self, "_on_node_added")
 
 func _on_node_added(node: Node):
-    # 只处理宝箱界面的限高套壳，彻底无视其他所有 UI！
+    # 1. 找回宝箱限高
     if node.name == "ItemDescription":
         if _processed.has(node): return
         _processed[node] = true
@@ -21,11 +15,22 @@ func _on_node_added(node: Node):
         yield(get_tree(), "idle_frame")
         
         if is_instance_valid(node):
-            # 只要不是商店，就套壳
-            if "Shop" not in str(node.get_path()):
+            var path = str(node.get_path())
+            # 排除商店，其他全部套壳
+            if "Shop" not in path:
                 _wrap_and_lock_crate(node)
+        return
+        
+    # 2. 处理所有滚动框（商店、设置等）
+    if node is ScrollContainer:
+        if _processed.has(node): return
+        _processed[node] = true
+        
+        yield(get_tree(), "idle_frame")
+        if is_instance_valid(node):
+            _setup_smart_scroll(node)
 
-# ============ 宝箱限高（保持之前的完美状态） ============
+# ============ 宝箱套壳限高 ============
 func _wrap_and_lock_crate(popup_root: Control):
     var parent = popup_root.get_parent()
     if not parent or parent is ScrollContainer:
@@ -56,41 +61,45 @@ func _wrap_and_lock_crate(popup_root: Control):
         popup_root.rect_position = Vector2(0, 0)
         popup_root.rect_min_size.x = orig_width
         popup_root.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-
-# ============ 透明守门员：全局滑动接管 ============
-func _input(event: InputEvent):
-    # 1. 手指按下时，记录初始位置，并寻找按下的位置有没有滚动条
-    if event is InputEventScreenTouch and event.pressed:
-        _touch_start_pos = event.position
-        _is_dragging = false
-        _active_scroll = _find_scroll_at_pos(event.position)
         
-    # 2. 手指移动时
-    elif event is InputEventScreenDrag:
-        # 如果还没判定为滑动，先算算距离
-        if not _is_dragging:
-            if event.position.distance_to(_touch_start_pos) > DRAG_THRESHOLD:
-                _is_dragging = true
-        
-        # 如果判定为滑动，且有激活的滚动条，立刻接管！
-        if _is_dragging and is_instance_valid(_active_scroll):
-            # 灵敏度微调：乘以 1.5 倍手感更好
-            _active_scroll.scroll_vertical -= event.relative.y * 1.5
-            # 💥 核心：吃掉事件！告诉游戏“这是一个滑动，千万别触发底下的按钮”
-            get_tree().set_input_as_handled()
-            
-    # 3. 手指松开，重置状态
-    elif event is InputEventScreenTouch and not event.pressed:
-        _is_dragging = false
-        _active_scroll = null
+    _setup_smart_scroll(scroll)
 
-# ============ 辅助：找出触摸点底下的 ScrollContainer ============
-func _find_scroll_at_pos(pos: Vector2) -> ScrollContainer:
-    var scrolls = get_tree().root.find_children("*", "ScrollContainer", true, false)
-    # 倒序遍历，优先找最顶层的
-    for i in range(scrolls.size() - 1, -1, -1):
-        var s = scrolls[i]
-        if is_instance_valid(s) and s.is_visible_in_tree():
-            if s.get_global_rect().has_point(pos):
-                return s
-    return null
+# ============ 精准劫持：让滑动与点击互不干扰 ============
+func _setup_smart_scroll(scroll: ScrollContainer):
+    # 1. 让背景和文字变成透明，让手指滑动直接穿透过去
+    _set_text_ignore(scroll)
+    
+    # 2. 顺藤摸瓜，找出里面所有的按钮和开关
+    var buttons = _find_all_buttons(scroll)
+    for btn in buttons:
+        # 如果还没绑定过，就绑定触摸滑动
+        if not btn.is_connected("gui_input", self, "_on_button_gui_input"):
+            btn.connect("gui_input", self, "_on_button_gui_input", [btn, scroll])
+
+# 把所有纯文本和普通容器设为忽略触摸
+func _set_text_ignore(node: Node):
+    for child in node.get_children():
+        if child is Control:
+            if not (child is Button or child is ScrollBar):
+                child.mouse_filter = Control.MOUSE_FILTER_IGNORE
+                _set_text_ignore(child)
+
+# 找出所有按钮（包括 CheckButton 开关）
+func _find_all_buttons(root: Node) -> Array:
+    var result = []
+    if root is Button:
+        result.append(root)
+    for child in root.get_children():
+        result.append_array(_find_all_buttons(child))
+    return result
+
+# 核心：在按钮上滑动时，劫持事件去滚动！
+func _on_button_gui_input(event: InputEvent, btn: Control, scroll: ScrollContainer):
+    if event is InputEventScreenDrag:
+        # 手指在按钮上滑动，强行让外层滚动条滚动
+        scroll.scroll_vertical -= event.relative.y * 1.5
+        # 吃掉事件，这样按钮就不会被触发点击！
+        btn.accept_event()
+    elif event is InputEventMouseMotion and event.button_mask & BUTTON_MASK_LEFT:
+        scroll.scroll_vertical -= event.relative.y * 1.5
+        btn.accept_event()
