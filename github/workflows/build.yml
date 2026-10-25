@@ -1,0 +1,26 @@
+name: Build Brotato Mod
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Package Mod
+        run: |
+          mkdir -p build_output
+          cp manifest.json mod_main.gd build_output/
+          cd build_output
+          zip -r ../TooltipScroll.zip .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TooltipScroll-Mod
+          path: TooltipScroll.zip
