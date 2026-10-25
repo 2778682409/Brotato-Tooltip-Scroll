@@ -12,15 +12,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Package Mod
+      - name: Prepare Mod Structure
         run: |
-          mkdir -p build_output
-          cp manifest.json mod_main.gd build_output/
-          cd build_output
-          zip -r ../TooltipScroll.zip .
+          # 按照 Brotato ModLoader 的标准规范建立文件夹
+          mkdir -p build/mods-unpacked/yuan-TooltipScroll
+          cp manifest.json mod_main.gd build/mods-unpacked/yuan-TooltipScroll/
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: TooltipScroll-Mod
-          path: TooltipScroll.zip
+          # 直接上传 build 文件夹里的所有内容
+          path: build/
