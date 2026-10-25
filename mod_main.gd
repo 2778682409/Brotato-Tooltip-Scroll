@@ -1,7 +1,7 @@
 extends Node
 
-var _has_scanned = false
 var _timer: Timer
+var _has_shown_for_current_popup = false
 
 func _ready():
     _timer = Timer.new()
@@ -11,12 +11,11 @@ func _ready():
     add_child(_timer)
 
 func _scan_and_show_log():
-    if _has_scanned: return
-
-    # 1. 寻找全屏幕字数最长的节点
     var longest_node = null
     var max_len = 0
     var stack = [get_tree().root]
+    
+    # 找全屏最长文本
     while stack.size() > 0:
         var node = stack.pop_back()
         if (node is Label or node is RichTextLabel) and "text" in node:
@@ -26,45 +25,50 @@ func _scan_and_show_log():
         for child in node.get_children():
             stack.push_back(child)
 
-    # 2. 发现长文本，立刻生成“全息日志”
+    # 如果找到长文本
     if max_len > 50 and longest_node != null:
-        _has_scanned = true
-        _timer.stop()
-        _build_holo_console(longest_node, max_len)
+        var path = str(longest_node.get_path())
+        
+        # 🚫 防骗机制：如果路径里带有 TitleScreen（主菜单）或者 Credits（制作人），直接忽略！
+        if "TitleScreen" in path or "Credits" in path or "Names" == longest_node.name:
+            return
+            
+        # 🛑 防止重复弹窗：如果当前已经弹了，就不重复弹了
+        if not _has_shown_for_current_popup:
+            _has_shown_for_current_popup = true
+            _build_holo_console(longest_node, max_len)
+            
+    else:
+        # 如果没找到长文本（比如关掉弹窗了），重置状态，准备抓下一个
+        _has_shown_for_current_popup = false
 
 func _build_holo_console(target_node: Node, text_len: int):
-    # 构建日志文本（类似 print 的格式）
-    var log_text = "=== Brotato 全息日志 ===" + "\n\n"
-    log_text += "[发现超长文本节点]" + "\n"
+    var log_text = "=== 抓到目标！请截图！ ===" + "\n\n"
     log_text += "名字: " + str(target_node.name) + "\n"
     log_text += "类型: " + str(target_node.get_class()) + "\n"
     log_text += "字数: " + str(text_len) + "\n"
     log_text += "大小: " + str(target_node.rect_size) + "\n"
-    log_text += "位置: " + str(target_node.rect_position) + "\n"
     log_text += "完整路径: " + str(target_node.get_path()) + "\n\n"
     
-    # 顺便打一下它的父节点信息
     var parent = target_node.get_parent()
     if parent:
-        log_text += "[父节点信息]" + "\n"
+        log_text += "[父节点]" + "\n"
         log_text += "名字: " + str(parent.name) + "\n"
         log_text += "类型: " + str(parent.get_class()) + "\n"
-        log_text += "大小: " + str(parent.rect_size) + "\n"
         log_text += "完整路径: " + str(parent.get_path()) + "\n\n"
 
-    log_text += "[部分文本内容]" + "\n"
+    log_text += "[文本内容]" + "\n"
     log_text += target_node.text.substr(0, 100) + "..." + "\n"
 
-    # 3. 在屏幕上画出这个日志面板
+    # 画板子
     var panel = Panel.new()
     panel.rect_size = get_viewport().size * 0.9
     panel.rect_position = get_viewport().size * 0.05
-    
     var style = StyleBoxFlat.new()
-    style.bg_color = Color(0, 0, 0, 0.85) # 半透明黑色背景
+    style.bg_color = Color(0, 0, 0, 0.85)
     panel.add_stylebox_override("panel", style)
 
-    # 加上滚动条，防止字太多看不过来
+    # 套滚动条
     var scroll = ScrollContainer.new()
     scroll.rect_min_size = panel.rect_size
     scroll.rect_size = panel.rect_size
@@ -75,9 +79,16 @@ func _build_holo_console(target_node: Node, text_len: int):
     var label = RichTextLabel.new()
     label.bbcode_enabled = true
     label.text = log_text
-    label.add_color_override("default_color", Color(0, 1, 0)) # 类似终端的绿色文字
+    label.add_color_override("default_color", Color(0, 1, 0))
     label.rect_min_size = Vector2(panel.rect_size.x - 20, 0)
     label.fit_content_height = true
     scroll.add_child(label)
+
+    # 加个按钮把它关掉（方便你继续玩游戏）
+    var close_btn = Button.new()
+    close_btn.text = "关闭日志"
+    close_btn.rect_position = Vector2(panel.rect_size.x - 120, 10)
+    close_btn.connect("pressed", panel, "queue_free")
+    panel.add_child(close_btn)
 
     get_tree().root.call_deferred("add_child", panel)
