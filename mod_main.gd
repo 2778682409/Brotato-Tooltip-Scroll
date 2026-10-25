@@ -3,13 +3,21 @@ extends Node
 var _processed = {}
 
 func _ready():
+    # 1. 游戏启动时，先主动扫一遍已经存在的 UI（解决主界面 Mod 列表滑不动）
+    call_deferred("_scan_existing_ui")
+    
+    # 2. 监听后续动态生成的 UI
     get_tree().connect("node_added", self, "_on_node_added")
 
+func _scan_existing_ui():
+    var scrolls = _find_all_scrolls(get_tree().root)
+    for s in scrolls:
+        _setup_native_scroll(s)
+
 func _on_node_added(node: Node):
-    # 1. 处理宝箱和商店的物品弹窗
+    # 1. 处理宝箱的物品描述框限高
     if node.name == "ItemDescription":
-        if _processed.has(node):
-            return
+        if _processed.has(node): return
         _processed[node] = true
         
         yield(get_tree(), "idle_frame")
@@ -17,25 +25,21 @@ func _on_node_added(node: Node):
         
         if is_instance_valid(node):
             var path = str(node.get_path())
-            if "Shop" in path:
-                var scrolls = _find_all_scrolls(node)
-                for s in scrolls:
-                    _setup_touch_scroll(s)
-            else:
+            # 排除商店，其他全部套壳
+            if "Shop" not in path:
                 _wrap_and_lock_crate(node)
         return
         
-    # 2. 处理设置界面等其他滚动条
+    # 2. 处理新生成的滚动框
     if node is ScrollContainer:
-        if _processed.has(node):
-            return
+        if _processed.has(node): return
         _processed[node] = true
         
         yield(get_tree(), "idle_frame")
         if is_instance_valid(node):
-            _setup_touch_scroll(node)
+            _setup_native_scroll(node)
 
-# ============ 宝箱限高 ============
+# ============ 宝箱套壳限高 ============
 func _wrap_and_lock_crate(popup_root: Control):
     var parent = popup_root.get_parent()
     if not parent or parent is ScrollContainer:
@@ -67,54 +71,45 @@ func _wrap_and_lock_crate(popup_root: Control):
         popup_root.rect_min_size.x = orig_width
         popup_root.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
         
-    _setup_touch_scroll(scroll)
+    _setup_native_scroll(scroll)
 
-# ============ 核心：赋予滚动条能力 + 暗中劫持按钮 ============
-func _setup_touch_scroll(scroll: ScrollContainer):
-    scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+# ============ 核心：纯原生“清理路障” ============
+func _setup_native_scroll(scroll: ScrollContainer):
+    # 确保滚动框接收触摸，并且允许事件穿透给它
+    scroll.mouse_filter = Control.MOUSE_FILTER_PASS
     
-    # 1. 文字容器透明化
-    _set_mouse_ignore_for_containers(scroll)
-    
-    # 2. 找出所有按钮（开关等）
-    var buttons = _find_buttons(scroll)
-    for btn in buttons:
-        # 💥 抄它的作业：把开关的黑色背景干掉，变透明！
-        if btn is CheckButton:
-            var empty_style = StyleBoxEmpty.new()
-            btn.add_stylebox_override("normal", empty_style)
-            btn.add_stylebox_override("pressed", empty_style)
-            btn.add_stylebox_override("focus", empty_style)
-            btn.add_stylebox_override("disabled", empty_style)
-            # 保持鼠标事件穿透模式
-            btn.mouse_filter = Control.MOUSE_FILTER_PASS
-        
-        # 挂上咱们的防误触滑动补丁
-        if not btn.is_connected("gui_input", self, "_on_button_gui_input"):
-            btn.connect("gui_input", self, "_on_button_gui_input", [scroll])
-        
-    if not scroll.is_connected("gui_input", self, "_on_scroll_gui_input"):
-        scroll.connect("gui_input", self, "_on_scroll_gui_input", [scroll])
+    # 调用补丁作者的绝招：把内部的按钮和文字清理干净
+    _clean_up_children(scroll)
 
-func _set_mouse_ignore_for_containers(node: Node):
+func _clean_up_children(node: Node):
     for child in node.get_children():
         if child is Control:
-            if child is Button or child is ScrollBar:
-                pass 
-            else:
+            # 1. 如果遇到开关 (CheckButton)
+            if child is CheckButton:
+                # 抄作业：干掉黑色大背景，变成透明，防止视觉变丑
+                var empty_style = StyleBoxEmpty.new()
+                child.add_stylebox_override("normal", empty_style)
+                child.add_stylebox_override("pressed", empty_style)
+                child.add_stylebox_override("focus", empty_style)
+                child.add_stylebox_override("disabled", empty_style)
+                
+                # 允许事件向下传递（滑动的关键）
+                child.mouse_filter = Control.MOUSE_FILTER_PASS
+                
+            # 2. 如果是普通按钮
+            elif child is Button:
+                child.mouse_filter = Control.MOUSE_FILTER_PASS
+                
+            # 3. 如果是文字、图片、或者普通容器
+            elif child is Label or child is RichTextLabel or child is TextureRect or child is Container:
+                # 设为穿透，让手指滑动时直接穿透给底下的 ScrollContainer
                 child.mouse_filter = Control.MOUSE_FILTER_IGNORE
-                _set_mouse_ignore_for_containers(child)
+                # 继续往下扒
+                _clean_up_children(child)
         else:
-            _set_mouse_ignore_for_containers(child)
+            _clean_up_children(child)
 
-func _find_buttons(root: Node) -> Array:
-    var result = []
-    if root is Button:
-        result.append(root)
-    for child in root.get_children():
-        result.append_array(_find_buttons(child))
-    return result
-
+# ============ 辅助函数 ============
 func _find_all_scrolls(root: Node) -> Array:
     var result = []
     if root is ScrollContainer:
@@ -122,21 +117,3 @@ func _find_all_scrolls(root: Node) -> Array:
     for child in root.get_children():
         result.append_array(_find_all_scrolls(child))
     return result
-
-# 监听滚动框本体滑动
-func _on_scroll_gui_input(event: InputEvent, scroll: ScrollContainer):
-    if event is InputEventScreenDrag:
-        scroll.scroll_vertical -= event.relative.y
-        scroll.accept_event()
-    elif event is InputEventMouseMotion and event.button_mask & BUTTON_MASK_LEFT:
-        scroll.scroll_vertical -= event.relative.y
-        scroll.accept_event()
-
-# 核心劫持：当手指按在开关上滑动时，截获事件用来滚动
-func _on_button_gui_input(event: InputEvent, scroll: ScrollContainer):
-    if event is InputEventScreenDrag:
-        scroll.scroll_vertical -= event.relative.y
-        scroll.accept_event()
-    elif event is InputEventMouseMotion and event.button_mask & BUTTON_MASK_LEFT:
-        scroll.scroll_vertical -= event.relative.y
-        scroll.accept_event()
