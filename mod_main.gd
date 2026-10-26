@@ -1,14 +1,12 @@
 extends Node
 
 var _processed = {}
-# 记录是否正在滑动
 var _is_sliding := false
 
 func _ready():
     get_tree().connect("node_added", self, "_on_node_added")
     call_deferred("_scan_existing_ui")
 
-# 游戏启动时扫描一遍已有的主界面
 func _scan_existing_ui():
     var all_scrolls = get_tree().root.find_children("*", "ScrollContainer", true, false)
     for s in all_scrolls:
@@ -17,7 +15,6 @@ func _scan_existing_ui():
             _setup_touch_scroll(s)
 
 func _on_node_added(node: Node):
-    # 1. 处理宝箱和商店的物品弹窗
     if node.name == "ItemDescription":
         if _processed.has(node): return
         _processed[node] = true
@@ -33,7 +30,6 @@ func _on_node_added(node: Node):
                 _wrap_and_lock_crate(node)
         return
         
-    # 2. 处理设置界面等其他滚动条
     if node is ScrollContainer:
         if _processed.has(node): return
         _processed[node] = true
@@ -81,7 +77,6 @@ func _setup_touch_scroll(scroll: ScrollContainer):
     var buttons = _find_buttons(scroll)
     for btn in buttons:
         if btn is CheckButton:
-            # 抄作业：干掉大黑框
             var empty_style = StyleBoxEmpty.new()
             btn.add_stylebox_override("normal", empty_style)
             btn.add_stylebox_override("pressed", empty_style)
@@ -89,17 +84,18 @@ func _setup_touch_scroll(scroll: ScrollContainer):
             btn.add_stylebox_override("disabled", empty_style)
             btn.mouse_filter = Control.MOUSE_FILTER_PASS
         
-        # 挂载带拦截功能的 gui_input
         if not btn.is_connected("gui_input", self, "_on_button_gui_input"):
             btn.connect("gui_input", self, "_on_button_gui_input", [scroll])
         
     if not scroll.is_connected("gui_input", self, "_on_scroll_gui_input"):
         scroll.connect("gui_input", self, "_on_scroll_gui_input", [scroll])
 
+# 💥 核心修改：照抄 Touch slide 的白名单
 func _set_mouse_ignore_for_containers(node: Node):
     for child in node.get_children():
         if child is Control:
-            if child is Button or child is ScrollBar:
+            # 如果是需要交互的控件，全部放行，绝不设为 IGNORE！
+            if child is BaseButton or child is ScrollBar or child is Slider or child is OptionButton or child is LineEdit or child is ColorPicker:
                 pass 
             else:
                 child.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -126,20 +122,18 @@ func _find_all_scrolls(root: Node) -> Array:
 # 监听滚动框本体滑动
 func _on_scroll_gui_input(event: InputEvent, scroll: ScrollContainer):
     if event is InputEventScreenDrag or (event is InputEventMouseMotion and event.button_mask & BUTTON_MASK_LEFT):
-        _is_sliding = true # 标记正在滑动
+        _is_sliding = true
         scroll.scroll_vertical -= event.relative.y
         scroll.accept_event()
 
-# 💥 核心魔法：在开关上滑动 + 拦截抬起
+# 在开关上滑动 + 拦截抬起
 func _on_button_gui_input(event: InputEvent, scroll: ScrollContainer):
     if event is InputEventScreenDrag or (event is InputEventMouseMotion and event.button_mask & BUTTON_MASK_LEFT):
         _is_sliding = true
         scroll.scroll_vertical -= event.relative.y
         scroll.accept_event()
         
-    # 抄 Touch slide 的绝杀：当手指抬起，且刚才发生了滑动
     elif event is InputEventScreenTouch or (event is InputEventMouseButton and not event.pressed):
         if _is_sliding:
-            # 拦截抬起事件！开关接收不到抬起，就不会触发点击！
             scroll.accept_event()
             _is_sliding = false
