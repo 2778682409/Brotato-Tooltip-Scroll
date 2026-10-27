@@ -39,35 +39,47 @@ func _on_node_added(node: Node):
         if is_instance_valid(node):
             _setup_touch_scroll(node)
             
-        # 3. 💥 新增：处理升级界面的卡片
+    # 3. 💥 处理升级界面的卡片
     if node is PanelContainer and "UpgradeUI" in node.name:
         if _processed.has(node): return
         _processed[node] = true
-        # 延迟 0.2 秒，等卡片的文字数据彻底加载完并排版好
-        yield(get_tree().create_timer(0.2), "timeout")
-        if is_instance_valid(node):
-            _fix_upgrade_card(node)
+        
+        # 监听尺寸变化，当游戏刷新文字导致卡片尺寸改变时，立刻重新强制限高
+        if not node.is_connected("resized", self, "_on_upgrade_card_resized"):
+            node.connect("resized", self, "_on_upgrade_card_resized", [node])
+            
+        # 延迟一帧处理，等内部数据排版完毕
+        call_deferred("_fix_upgrade_card", node)
 
-# 💥 修改这个函数
+func _on_upgrade_card_resized(card: Control):
+    # 防止设置 rect_min_size 导致无限递归触发 resized
+    if card.get_meta("is_fixing", false): return
+    card.set_meta("is_fixing", true)
+    _fix_upgrade_card(card)
+    card.set_meta("is_fixing", false)
+
 func _fix_upgrade_card(card: Control):
+    if not is_instance_valid(card): return
+    
+    # 💥 强行锁定卡片本身的高度（可根据你的屏幕比例微调 220.0 ~ 250.0）
+    var card_height = 230.0
+    card.rect_min_size.y = card_height
+    
     # 找到卡片里的原生滚动框
     var scroll = card.find_node("ScrollContainer", true, false)
     if scroll:
-        # 强行锁定高度，比如 160
-        var limit_h = 160.0
-        scroll.rect_min_size.y = limit_h
-        scroll.rect_size.y = limit_h
-        
-        # 💥 核心防御：禁止它被外面的父节点拉伸！
-        scroll.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-        # 💥 开启裁剪，超出部分直接切掉
-        scroll.clip_contents = true
-        
         scroll.scroll_vertical_enabled = true
         scroll.scroll_horizontal_enabled = false
         
+        # 💥 核心：让它填满卡片剩余空间，不要往外撑破卡片，超出部分裁剪
+        scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL 
+        scroll.clip_contents = true
+        
         # 注入触摸滑动
         _setup_touch_scroll(scroll)
+    else:
+        # 如果原版卡片内部没有 ScrollContainer，直接开启卡片裁剪，防止文字溢出
+        card.clip_contents = true
 
 # ============ 宝箱限高 ============
 func _wrap_and_lock_crate(popup_root: Control):
