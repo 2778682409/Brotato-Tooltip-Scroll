@@ -39,47 +39,34 @@ func _on_node_added(node: Node):
         if is_instance_valid(node):
             _setup_touch_scroll(node)
             
-    # 3. 💥 处理升级界面的卡片
+    # 3. 💥 精准拦截升级卡片
     if node is PanelContainer and "UpgradeUI" in node.name:
         if _processed.has(node): return
         _processed[node] = true
-        
-        # 监听尺寸变化，当游戏刷新文字导致卡片尺寸改变时，立刻重新强制限高
-        if not node.is_connected("resized", self, "_on_upgrade_card_resized"):
-            node.connect("resized", self, "_on_upgrade_card_resized", [node])
-            
-        # 延迟一帧处理，等内部数据排版完毕
-        call_deferred("_fix_upgrade_card", node)
+        yield(get_tree(), "idle_frame")
+        yield(get_tree(), "idle_frame")
+        if is_instance_valid(node):
+            _fix_upgrade_card(node)
 
-func _on_upgrade_card_resized(card: Control):
-    # 防止设置 rect_min_size 导致无限递归触发 resized
-    if card.get_meta("is_fixing", false): return
-    card.set_meta("is_fixing", true)
-    _fix_upgrade_card(card)
-    card.set_meta("is_fixing", false)
-
+# 💥 专门针对升级卡片的修复
 func _fix_upgrade_card(card: Control):
-    if not is_instance_valid(card): return
-    
-    # 💥 强行锁定卡片本身的高度（可根据你的屏幕比例微调 220.0 ~ 250.0）
-    var card_height = 230.0
-    card.rect_min_size.y = card_height
-    
-    # 找到卡片里的原生滚动框
-    var scroll = card.find_node("ScrollContainer", true, false)
-    if scroll:
-        scroll.scroll_vertical_enabled = true
-        scroll.scroll_horizontal_enabled = false
-        
-        # 💥 核心：让它填满卡片剩余空间，不要往外撑破卡片，超出部分裁剪
-        scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL 
-        scroll.clip_contents = true
-        
-        # 注入触摸滑动
-        _setup_touch_scroll(scroll)
-    else:
-        # 如果原版卡片内部没有 ScrollContainer，直接开启卡片裁剪，防止文字溢出
-        card.clip_contents = true
+    # 精准找到描述框所在的 ScrollContainer，而不是名称框
+    var desc = card.find_node("UpgradeDescription", true, false)
+    if desc:
+        var scroll = desc.find_node("ScrollContainer", true, false)
+        if scroll:
+            var limit_h = 180.0 # 锁定高度为 180 像素
+            scroll.rect_min_size.y = limit_h
+            scroll.rect_size.y = limit_h
+            # 💥 最关键：告诉父节点“我绝对不能被拉伸变大”
+            scroll.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+            scroll.clip_contents = true
+            
+            scroll.scroll_vertical_enabled = true
+            scroll.scroll_horizontal_enabled = false
+            
+            # 注入触摸滑动能力
+            _setup_touch_scroll(scroll)
 
 # ============ 宝箱限高 ============
 func _wrap_and_lock_crate(popup_root: Control):
@@ -116,11 +103,8 @@ func _wrap_and_lock_crate(popup_root: Control):
 # ============ 核心：赋予滚动条能力 + 暗中劫持按钮 ============
 func _setup_touch_scroll(scroll: ScrollContainer):
     scroll.mouse_filter = Control.MOUSE_FILTER_STOP
-    
-    # 1. 文字容器透明化
     _set_mouse_ignore_for_containers(scroll)
     
-    # 2. 找出所有按钮（开关等）
     var buttons = _find_buttons(scroll)
     for btn in buttons:
         if btn is CheckButton:
