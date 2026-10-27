@@ -39,28 +39,34 @@ func _on_node_added(node: Node):
         if is_instance_valid(node):
             _setup_touch_scroll(node)
             
-    # 3. 💥 新增：处理升级界面的卡片
+        # 3. 💥 新增：处理升级界面的卡片
     if node is PanelContainer and "UpgradeUI" in node.name:
         if _processed.has(node): return
         _processed[node] = true
-        yield(get_tree(), "idle_frame")
-        yield(get_tree(), "idle_frame")
+        # 延迟 0.2 秒，等卡片的文字数据彻底加载完并排版好
+        yield(get_tree().create_timer(0.2), "timeout")
         if is_instance_valid(node):
             _fix_upgrade_card(node)
 
-# 💥 新增函数：限制升级卡片的内部高度，并注入滑动
+# 💥 修改这个函数
 func _fix_upgrade_card(card: Control):
-    # 找到卡片里的文本滚动框
+    # 找到卡片里的原生滚动框
     var scroll = card.find_node("ScrollContainer", true, false)
     if scroll:
-        # 强行锁定高度，让超出的文本变成滚动条，给下面的按钮留出空间
-        var limit_h = 160.0 # 这个数值可以微调，160差不多是原来高度的一大半
+        # 强行锁定高度，比如 160
+        var limit_h = 160.0
         scroll.rect_min_size.y = limit_h
         scroll.rect_size.y = limit_h
+        
+        # 💥 核心防御：禁止它被外面的父节点拉伸！
+        scroll.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+        # 💥 开启裁剪，超出部分直接切掉
+        scroll.clip_contents = true
+        
         scroll.scroll_vertical_enabled = true
         scroll.scroll_horizontal_enabled = false
         
-        # 注入触摸滑动能力
+        # 注入触摸滑动
         _setup_touch_scroll(scroll)
 
 # ============ 宝箱限高 ============
