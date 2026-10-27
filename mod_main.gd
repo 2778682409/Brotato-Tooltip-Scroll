@@ -15,6 +15,7 @@ func _scan_existing_ui():
             _setup_touch_scroll(s)
 
 func _on_node_added(node: Node):
+    # 1. 处理宝箱和商店的物品弹窗
     if node.name == "ItemDescription":
         if _processed.has(node): return
         _processed[node] = true
@@ -30,12 +31,37 @@ func _on_node_added(node: Node):
                 _wrap_and_lock_crate(node)
         return
         
+    # 2. 处理设置界面等其他滚动条
     if node is ScrollContainer:
         if _processed.has(node): return
         _processed[node] = true
         yield(get_tree(), "idle_frame")
         if is_instance_valid(node):
             _setup_touch_scroll(node)
+            
+    # 3. 💥 新增：处理升级界面的卡片
+    if node is PanelContainer and "UpgradeUI" in node.name:
+        if _processed.has(node): return
+        _processed[node] = true
+        yield(get_tree(), "idle_frame")
+        yield(get_tree(), "idle_frame")
+        if is_instance_valid(node):
+            _fix_upgrade_card(node)
+
+# 💥 新增函数：限制升级卡片的内部高度，并注入滑动
+func _fix_upgrade_card(card: Control):
+    # 找到卡片里的文本滚动框
+    var scroll = card.find_node("ScrollContainer", true, false)
+    if scroll:
+        # 强行锁定高度，让超出的文本变成滚动条，给下面的按钮留出空间
+        var limit_h = 160.0 # 这个数值可以微调，160差不多是原来高度的一大半
+        scroll.rect_min_size.y = limit_h
+        scroll.rect_size.y = limit_h
+        scroll.scroll_vertical_enabled = true
+        scroll.scroll_horizontal_enabled = false
+        
+        # 注入触摸滑动能力
+        _setup_touch_scroll(scroll)
 
 # ============ 宝箱限高 ============
 func _wrap_and_lock_crate(popup_root: Control):
@@ -69,11 +95,14 @@ func _wrap_and_lock_crate(popup_root: Control):
         
     _setup_touch_scroll(scroll)
 
-# ============ 核心：去黑框 + 挂载拦截 ============
+# ============ 核心：赋予滚动条能力 + 暗中劫持按钮 ============
 func _setup_touch_scroll(scroll: ScrollContainer):
     scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+    
+    # 1. 文字容器透明化
     _set_mouse_ignore_for_containers(scroll)
     
+    # 2. 找出所有按钮（开关等）
     var buttons = _find_buttons(scroll)
     for btn in buttons:
         if btn is CheckButton:
@@ -90,12 +119,10 @@ func _setup_touch_scroll(scroll: ScrollContainer):
     if not scroll.is_connected("gui_input", self, "_on_scroll_gui_input"):
         scroll.connect("gui_input", self, "_on_scroll_gui_input", [scroll])
 
-# 💥 核心修改：照抄 Touch slide 的白名单
 func _set_mouse_ignore_for_containers(node: Node):
     for child in node.get_children():
         if child is Control:
-            # 如果是需要交互的控件，全部放行，绝不设为 IGNORE！
-            if child is BaseButton or child is ScrollBar or child is Slider or child is OptionButton or child is LineEdit or child is ColorPicker:
+            if child is Button or child is ScrollBar:
                 pass 
             else:
                 child.mouse_filter = Control.MOUSE_FILTER_IGNORE
