@@ -38,35 +38,19 @@ func _on_node_added(node: Node):
         yield(get_tree(), "idle_frame")
         if is_instance_valid(node):
             _setup_touch_scroll(node)
-            
-    # 3. 💥 精准拦截升级卡片
+
+    # 3. 💥 处理升级界面的卡片（UpgradeUI）
     if node is PanelContainer and "UpgradeUI" in node.name:
         if _processed.has(node): return
         _processed[node] = true
+        # 等两帧，让 Improved Tooltips 的文本和原版排版彻底生成
         yield(get_tree(), "idle_frame")
         yield(get_tree(), "idle_frame")
         if is_instance_valid(node):
-            _fix_upgrade_card(node)
-
-# 💥 专门针对升级卡片的修复
-func _fix_upgrade_card(card: Control):
-    # 精准找到描述框所在的 ScrollContainer，而不是名称框
-    var desc = card.find_node("UpgradeDescription", true, false)
-    if desc:
-        var scroll = desc.find_node("ScrollContainer", true, false)
-        if scroll:
-            var limit_h = 180.0 # 锁定高度为 180 像素
-            scroll.rect_min_size.y = limit_h
-            scroll.rect_size.y = limit_h
-            # 💥 最关键：告诉父节点“我绝对不能被拉伸变大”
-            scroll.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-            scroll.clip_contents = true
-            
-            scroll.scroll_vertical_enabled = true
-            scroll.scroll_horizontal_enabled = false
-            
-            # 注入触摸滑动能力
-            _setup_touch_scroll(scroll)
+            var desc = node.find_node("UpgradeDescription", true, false)
+            if desc:
+                _wrap_and_lock_upgrade(desc)
+        return
 
 # ============ 宝箱限高 ============
 func _wrap_and_lock_crate(popup_root: Control):
@@ -100,7 +84,37 @@ func _wrap_and_lock_crate(popup_root: Control):
         
     _setup_touch_scroll(scroll)
 
-# ============ 核心：赋予滚动条能力 + 暗中劫持按钮 ============
+# ============ 💥 升级卡片限高（新增） ============
+func _wrap_and_lock_upgrade(desc_node: Control):
+    var parent = desc_node.get_parent()
+    if not parent or parent is ScrollContainer: return
+
+    var index = desc_node.get_index()
+    
+    parent.remove_child(desc_node)
+    
+    var scroll = ScrollContainer.new()
+    scroll.name = "ModUpgradeScroll"
+    
+    # 锁定高度为 180，刚好够放描述词条，不会挤掉下面的按钮
+    var fixed_height = 180.0 
+    
+    scroll.rect_min_size = Vector2(0, fixed_height)
+    scroll.rect_size = Vector2(desc_node.rect_size.x, fixed_height)
+    scroll.scroll_horizontal_enabled = false
+    scroll.scroll_vertical_enabled = true
+    scroll.clip_contents = true
+
+    parent.add_child(scroll)
+    parent.move_child(scroll, index)
+    scroll.add_child(desc_node)
+    
+    if desc_node is Control:
+        desc_node.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+        
+    _setup_touch_scroll(scroll)
+
+# ============ 核心：去黑框 + 挂载拦截 ============
 func _setup_touch_scroll(scroll: ScrollContainer):
     scroll.mouse_filter = Control.MOUSE_FILTER_STOP
     _set_mouse_ignore_for_containers(scroll)
@@ -121,10 +135,11 @@ func _setup_touch_scroll(scroll: ScrollContainer):
     if not scroll.is_connected("gui_input", self, "_on_scroll_gui_input"):
         scroll.connect("gui_input", self, "_on_scroll_gui_input", [scroll])
 
+# 照抄 Touch slide 的白名单
 func _set_mouse_ignore_for_containers(node: Node):
     for child in node.get_children():
         if child is Control:
-            if child is Button or child is ScrollBar:
+            if child is BaseButton or child is ScrollBar or child is Slider or child is OptionButton or child is LineEdit or child is ColorPicker:
                 pass 
             else:
                 child.mouse_filter = Control.MOUSE_FILTER_IGNORE
