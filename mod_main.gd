@@ -16,20 +16,30 @@ func _scan_existing_ui():
 
 func _on_node_added(node: Node):
     # 1. 处理宝箱和商店的物品弹窗
-    if node.name == "ItemDescription":
-        if _processed.has(node): return
-        _processed[node] = true
-        yield(get_tree(), "idle_frame")
-        yield(get_tree(), "idle_frame")
-        if is_instance_valid(node):
-            var path = str(node.get_path())
-            if "Shop" in path:
-                var scrolls = _find_all_scrolls(node)
-                for s in scrolls:
-                    _setup_touch_scroll(s)
-            else:
-                _wrap_and_lock_crate(node)
-        return
+if node.name == "ItemDescription":
+    if _processed.has(node): return
+    _processed[node] = true
+    yield(get_tree(), "idle_frame")
+    yield(get_tree(), "idle_frame")
+    if is_instance_valid(node):
+        var path = str(node.get_path())
+        
+        # 💥 如果是在商店里，只加滑动
+        if "Shop" in path:
+            var scrolls = _find_all_scrolls(node)
+            for s in scrolls:
+                _setup_touch_scroll(s)
+                
+        # 💥 新增：如果是角色选择、图鉴等界面，原版自带滚动条，只加滑动不套壳！
+        elif "CharacterSelection" in path or "MenuCodex" in path:
+            var scrolls = _find_all_scrolls(node)
+            for s in scrolls:
+                _setup_touch_scroll(s)
+                
+        # 💥 只有在宝箱/升级界面，才进行暴力套壳限高
+        else:
+            _wrap_and_lock_crate(node)
+    return
         
     # 2. 处理设置界面等其他滚动条
     if node is ScrollContainer:
