@@ -3,7 +3,7 @@ extends Node
 var _processed = {}
 var _is_sliding := false
 
-# ================= 悬停检测系统 =================
+# ================= 幽灵指针系统 =================
 var _hover_timer: Timer = null
 var _current_hover_node: Control = null
 var _pending_hover_node: Control = null
@@ -12,7 +12,7 @@ func _ready():
     get_tree().connect("node_added", self, "_on_node_added")
     call_deferred("_scan_existing_ui")
 
-    # 初始化悬停防抖定时器（防止快速滑动时疯狂闪烁）
+    # 悬停延迟计时器，防止划太快弹窗疯狂闪烁
     _hover_timer = Timer.new()
     _hover_timer.one_shot = true
     _hover_timer.wait_time = 0.1
@@ -64,18 +64,17 @@ func _on_node_added(node: Node):
                 _wrap_and_lock_upgrade(desc)
         return
 
-# ================= 触控拦截与分离 =================
+# ================= 💥 核心：幽灵指针分离控制 =================
 func _input(event: InputEvent):
-    # 1. 手指按下/移动时
-    if event is InputEventScreenTouch and event.pressed:
-        # 记录按下坐标，立刻测试悬停
-        _update_hover(event.position)
-    elif event is InputEventScreenDrag:
-        # 💥 核心分离：手指移动时，滚动逻辑由 _on_scroll_gui_input 处理，
-        # 但我们要同时用这里的真实坐标去控制悬停。
+    # 只监听手指拖拽（滑动）事件，绝对不吃事件
+    if event is InputEventScreenDrag:
+        # 1. 移动真实的鼠标指针，让它跟着手指头走！
+        Input.warp_mouse_position(event.position)
+        
+        # 2. 自己算出当前手指底下压着谁，并触发悬停
         _update_hover(event.position)
         
-    # 2. 手指抬起时
+    # 手指抬起时，清空悬停状态
     elif event is InputEventScreenTouch and not event.pressed:
         _clear_hover_state()
 
@@ -86,12 +85,12 @@ func _update_hover(pos: Vector2):
         _pending_hover_node = target
         _hover_timer.stop()
         
-        # 如果移出了当前弹窗的卡片，立刻关闭它
+        # 移出原卡片，立刻关弹窗
         if _current_hover_node != null and _current_hover_node != target:
             _trigger_hover_exit(_current_hover_node)
             _current_hover_node = null
             
-        # 如果碰到了新卡片，启动延迟，防止滑太快闪烁
+        # 滑入新卡片，启动 0.1 秒延迟
         if target != null:
             _hover_timer.start()
 
@@ -108,16 +107,19 @@ func _clear_hover_state():
         _trigger_hover_exit(_current_hover_node)
     _current_hover_node = null
 
+# 寻找手指/鼠标底下的物品卡片
 func _find_item_at_position(pos: Vector2) -> Control:
+    # 1. 找商店物品 (ShopItem)
     for node in get_tree().root.find_children("ShopItem*", "Control", true, false):
         if node.is_visible_in_tree() and node.get_global_rect().has_point(pos):
             return node
-            
+    # 2. 找背包物品 (InventoryElement)
     for node in get_tree().root.find_children("InventoryElement*", "Control", true, false):
         if node.is_visible_in_tree() and node.get_global_rect().has_point(pos):
             return node
     return null
 
+# 触发弹窗
 func _trigger_hover_enter(node: Control):
     if node.has_method("_on_BuyButton_mouse_entered"):
         node._on_BuyButton_mouse_entered()
@@ -126,6 +128,7 @@ func _trigger_hover_enter(node: Control):
     else:
         node.emit_signal("mouse_entered")
 
+# 关闭弹窗
 func _trigger_hover_exit(node: Control):
     if node.has_method("_on_BuyButton_mouse_exited"):
         node._on_BuyButton_mouse_exited()
@@ -134,7 +137,7 @@ func _trigger_hover_exit(node: Control):
     else:
         node.emit_signal("mouse_exited")
 
-# ============ 宝箱/升级UI限高（保持原样） ============
+# ============ 宝箱限高 ============
 func _wrap_and_lock_crate(popup_root: Control):
     var parent = popup_root.get_parent()
     if not parent or parent is ScrollContainer: return
@@ -166,6 +169,7 @@ func _wrap_and_lock_crate(popup_root: Control):
         
     _setup_touch_scroll(scroll)
 
+# ============ 升级卡片限高 ============
 func _wrap_and_lock_upgrade(desc_node: Control):
     var parent = desc_node.get_parent()
     if not parent or parent is ScrollContainer: return
@@ -176,7 +180,6 @@ func _wrap_and_lock_upgrade(desc_node: Control):
     
     var scroll = ScrollContainer.new()
     scroll.name = "ModUpgradeScroll"
-    
     var fixed_height = 180.0 
     
     scroll.rect_min_size = Vector2(0, fixed_height)
@@ -194,7 +197,7 @@ func _wrap_and_lock_upgrade(desc_node: Control):
         
     _setup_touch_scroll(scroll)
 
-# ============ 滚动与滑动逻辑（保持原样） ============
+# ============ 滚动逻辑（严格保持原版，不吃点击事件） ============
 func _setup_touch_scroll(scroll: ScrollContainer):
     scroll.mouse_filter = Control.MOUSE_FILTER_STOP
     _set_mouse_ignore_for_containers(scroll)
@@ -242,6 +245,7 @@ func _find_all_scrolls(root: Node) -> Array:
         result.append_array(_find_all_scrolls(child))
     return result
 
+# 保留你的完美滑动拦截，保留 accept_event 防止滑动时误触
 func _on_scroll_gui_input(event: InputEvent, scroll: ScrollContainer):
     if event is InputEventScreenDrag or (event is InputEventMouseMotion and event.button_mask & BUTTON_MASK_LEFT):
         _is_sliding = true
@@ -249,7 +253,7 @@ func _on_scroll_gui_input(event: InputEvent, scroll: ScrollContainer):
         scroll.accept_event()
 
 func _on_button_gui_input(event: InputEvent, scroll: ScrollContainer):
-    if event is InputEventScreenDrag or (event is InputEventMouseButton and event.button_mask & BUTTON_MASK_LEFT):
+    if event is InputEventScreenDrag or (event is InputEventMouseMotion and event.button_mask & BUTTON_MASK_LEFT):
         _is_sliding = true
         scroll.scroll_vertical -= event.relative.y
         scroll.accept_event()
