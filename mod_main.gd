@@ -16,30 +16,30 @@ func _scan_existing_ui():
 
 func _on_node_added(node: Node):
     # 1. 处理宝箱和商店的物品弹窗
-if node.name == "ItemDescription":
-    if _processed.has(node): return
-    _processed[node] = true
-    yield(get_tree(), "idle_frame")
-    yield(get_tree(), "idle_frame")
-    if is_instance_valid(node):
-        var path = str(node.get_path())
-        
-        # 💥 如果是在商店里，只加滑动
-        if "Shop" in path:
-            var scrolls = _find_all_scrolls(node)
-            for s in scrolls:
-                _setup_touch_scroll(s)
-                
-        # 💥 新增：如果是角色选择、图鉴等界面，原版自带滚动条，只加滑动不套壳！
-        elif "CharacterSelection" in path or "MenuCodex" in path:
-            var scrolls = _find_all_scrolls(node)
-            for s in scrolls:
-                _setup_touch_scroll(s)
-                
-        # 💥 只有在宝箱/升级界面，才进行暴力套壳限高
-        else:
-            _wrap_and_lock_crate(node)
-    return
+    if node.name == "ItemDescription":
+        if _processed.has(node): return
+        _processed[node] = true
+        yield(get_tree(), "idle_frame")
+        yield(get_tree(), "idle_frame")
+        if is_instance_valid(node):
+            var path = str(node.get_path())
+            
+            # 如果是在商店里，只加滑动
+            if "Shop" in path:
+                var scrolls = _find_all_scrolls(node)
+                for s in scrolls:
+                    _setup_touch_scroll(s)
+                    
+            # 如果是角色选择、图鉴等界面，原版自带滚动条，只加滑动不套壳！
+            elif "CharacterSelection" in path or "MenuCodex" in path:
+                var scrolls = _find_all_scrolls(node)
+                for s in scrolls:
+                    _setup_touch_scroll(s)
+                    
+            # 只有在宝箱/升级界面，才进行暴力套壳限高
+            else:
+                _wrap_and_lock_crate(node)
+        return
         
     # 2. 处理设置界面等其他滚动条
     if node is ScrollContainer:
@@ -49,11 +49,10 @@ if node.name == "ItemDescription":
         if is_instance_valid(node):
             _setup_touch_scroll(node)
 
-    # 3. 💥 处理升级界面的卡片（UpgradeUI）
+    # 3. 处理升级界面的卡片（UpgradeUI）
     if node is PanelContainer and "UpgradeUI" in node.name:
         if _processed.has(node): return
         _processed[node] = true
-        # 等两帧，让 Improved Tooltips 的文本和原版排版彻底生成
         yield(get_tree(), "idle_frame")
         yield(get_tree(), "idle_frame")
         if is_instance_valid(node):
@@ -94,7 +93,7 @@ func _wrap_and_lock_crate(popup_root: Control):
         
     _setup_touch_scroll(scroll)
 
-# ============ 💥 升级卡片限高（新增） ============
+# ============ 升级卡片限高 ============
 func _wrap_and_lock_upgrade(desc_node: Control):
     var parent = desc_node.get_parent()
     if not parent or parent is ScrollContainer: return
@@ -106,7 +105,6 @@ func _wrap_and_lock_upgrade(desc_node: Control):
     var scroll = ScrollContainer.new()
     scroll.name = "ModUpgradeScroll"
     
-    # 锁定高度为 180，刚好够放描述词条，不会挤掉下面的按钮
     var fixed_height = 180.0 
     
     scroll.rect_min_size = Vector2(0, fixed_height)
