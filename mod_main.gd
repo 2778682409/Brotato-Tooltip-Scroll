@@ -2,10 +2,11 @@ extends Node
 
 var _processed = {}
 var _is_sliding := false
-var _last_mouse_pos = Vector2.ZERO
+var _last_hover_pos = Vector2.ZERO
+var _current_hover_node: Control = null
+var _last_check_time := 0.0
 
 func _ready():
-    # 强制显示鼠标（即使是在手机上，我们也需要在底层激活这个系统）
     Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
     
     get_tree().connect("node_added", self, "_on_node_added")
@@ -53,29 +54,90 @@ func _on_node_added(node: Node):
                 _wrap_and_lock_upgrade(desc)
         return
 
-# ============ 幽灵鼠标核心逻辑 ============
+# ============ 幽灵鼠标 & 暴力悬停核心逻辑 ============
 func _input(event):
-    # 监听手指移动
-    if event is InputEventScreenDrag:
+    # 监听手指滑动或鼠标拖拽
+    if event is InputEventScreenDrag or (event is InputEventMouseMotion and event.button_mask & BUTTON_MASK_LEFT):
+        var global_pos = event.position
+        
         # 1. 将真实鼠标指针传送到手指的位置
-        Input.warp_mouse_position(event.position)
+        Input.warp_mouse_position(global_pos)
         
-        # 2. 伪造一个“鼠标左键未按下”的移动事件，骗过 Godot 的拖拽屏蔽机制
+        # 2. 伪造一个“鼠标左键未按下”的移动事件（用 Input.parse_input_event 才能喂给底层）
         var fake_motion = InputEventMouseMotion.new()
-        fake_motion.position = event.position
-        fake_motion.global_position = event.position
+        fake_motion.position = global_pos
+        fake_motion.global_position = global_pos
         fake_motion.relative = event.relative
-        fake_motion.button_mask = 0 # 0 代表没有按键按下，这样就能触发 hover 而不是点击
+        fake_motion.button_mask = 0 
+        Input.parse_input_event(fake_motion)
         
-        # 把这个伪造事件喂给场景树
-        get_tree().input_event(fake_motion)
+        # 3. 暴力计算当前手指是否在物品上，并强制触发悬停
+        _bruteforce_hover(global_pos)
         
-    # 监听手指抬起
-    elif event is InputEventScreenTouch and not event.pressed:
-        # 手指抬起后，鼠标就停留在最后的位置
-        pass
+    # 监听手指或鼠标抬起
+    elif event is InputEventScreenTouch and not event.pressed or (event is InputEventMouseButton and not event.pressed and event.button_index == BUTTON_LEFT):
+        # 抬起时清理悬停状态
+        _clear_hover()
 
-# ============ 滑动逻辑（保持原样） ============
+# 暴力强制悬停逻辑（无视拖拽屏蔽）
+func _bruteforce_hover(pos: Vector2):
+    # 节流：100ms 检查一次，防止滑动时卡顿
+    var now = OS.get_ticks_msec()
+    if now - _last_check_time < 100:
+        return
+    _last_check_time = now
+    
+    # 如果位置没怎么变，跳过
+    if pos.distance_squared_to(_last_hover_pos) < 100:
+        return
+    _last_hover_pos = pos
+    
+    var target = _find_item_at_position(pos)
+    
+    if target == _current_hover_node:
+        return
+        
+    # 退出旧的节点
+    if _current_hover_node and is_instance_valid(_current_hover_node):
+        _current_hover_node.notification(NOTIFICATION_MOUSE_EXIT)
+        _current_hover_node.emit_signal("mouse_exited")
+        if _current_hover_node.has_method("_on_mouse_exited"):
+            _current_hover_node._on_mouse_exited()
+            
+    _current_hover_node = target
+    
+    # 进入新的节点（强行发送底层通知和信号）
+    if _current_hover_node and is_instance_valid(_current_hover_node):
+        _current_hover_node.notification(NOTIFICATION_MOUSE_ENTER)
+        _current_hover_node.emit_signal("mouse_entered")
+        
+        if _current_hover_node.has_method("_on_BuyButton_mouse_entered"):
+            _current_hover_node._on_BuyButton_mouse_entered()
+        elif _current_hover_node.has_method("_on_mouse_entered"):
+            _current_hover_node._on_mouse_entered()
+
+func _clear_hover():
+    if _current_hover_node and is_instance_valid(_current_hover_node):
+        _current_hover_node.notification(NOTIFICATION_MOUSE_EXIT)
+        _current_hover_node.emit_signal("mouse_exited")
+        if _current_hover_node.has_method("_on_mouse_exited"):
+            _current_hover_node._on_mouse_exited()
+    _current_hover_node = null
+    _last_hover_pos = Vector2.ZERO
+
+# 寻找鼠标/手指底下的物品卡片
+func _find_item_at_position(pos: Vector2) -> Control:
+    for node in get_tree().root.find_children("ShopItem*", "Control", true, false):
+        if node.is_visible_in_tree() and node.get_global_rect().has_point(pos):
+            return node
+            
+    for node in get_tree().root.find_children("InventoryElement*", "Control", true, false):
+        if node.is_visible_in_tree() and node.get_global_rect().has_point(pos):
+            return node
+            
+    return null
+
+# ============ 滑动逻辑 ============
 func _setup_touch_scroll(scroll: ScrollContainer):
     scroll.mouse_filter = Control.MOUSE_FILTER_STOP
     _set_mouse_ignore_for_containers(scroll)
@@ -116,7 +178,7 @@ func _on_button_gui_input(event: InputEvent, scroll: ScrollContainer):
             scroll.accept_event()
             _is_sliding = false
 
-# ============ 宝箱与升级UI限高（保持原样） ============
+# ============ 宝箱与升级UI限高 ============
 func _wrap_and_lock_crate(popup_root: Control):
     var parent = popup_root.get_parent()
     if not parent or parent is ScrollContainer: return
