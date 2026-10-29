@@ -7,6 +7,9 @@ var _is_sliding := false
 var _hover_timer: Timer = null
 var _current_hover_node: Control = null
 var _pending_hover_node: Control = null
+# 节流变量
+var _last_check_time := 0.0
+var _last_hover_pos := Vector2.ZERO
 
 func _ready():
     get_tree().connect("node_added", self, "_on_node_added")
@@ -89,9 +92,13 @@ func _on_scroll_gui_input(event: InputEvent, scroll: ScrollContainer):
     if event is InputEventScreenDrag or (event is InputEventMouseMotion and event.button_mask & BUTTON_MASK_LEFT):
         _is_sliding = true
         scroll.scroll_vertical -= event.relative.y
+        
+        # 💥 核心：将局部触摸坐标转为屏幕全局坐标，并发送假鼠标事件
+        var global_pos = scroll.get_global_transform_with_canvas().xform(event.position)
+        _fake_mouse_hover(global_pos)
+        _update_hover_state(global_pos)
+        
         scroll.accept_event()
-        # 拖拽时更新悬停状态
-        _update_hover_state(get_viewport().get_mouse_position())
         
     elif event is InputEventScreenTouch or (event is InputEventMouseButton and not event.pressed):
         _is_sliding = false
@@ -101,8 +108,12 @@ func _on_button_gui_input(event: InputEvent, scroll: ScrollContainer):
     if event is InputEventScreenDrag or (event is InputEventMouseMotion and event.button_mask & BUTTON_MASK_LEFT):
         _is_sliding = true
         scroll.scroll_vertical -= event.relative.y
+        
+        var global_pos = scroll.get_global_transform_with_canvas().xform(event.position)
+        _fake_mouse_hover(global_pos)
+        _update_hover_state(global_pos)
+        
         scroll.accept_event()
-        _update_hover_state(get_viewport().get_mouse_position())
         
     elif event is InputEventScreenTouch or (event is InputEventMouseButton and not event.pressed):
         if _is_sliding:
@@ -110,16 +121,34 @@ func _on_button_gui_input(event: InputEvent, scroll: ScrollContainer):
             _is_sliding = false
         _clear_hover_state()
 
+# 💥 欺骗引擎：发送一个左键未按下的鼠标移动事件，强制触发悬停
+func _fake_mouse_hover(global_pos: Vector2):
+    var now = OS.get_ticks_msec()
+    if now - _last_check_time < 50: return # 稍微加一点节流，防止刷爆
+    
+    var fake_motion = InputEventMouseMotion.new()
+    fake_motion.position = global_pos
+    fake_motion.global_position = global_pos
+    fake_motion.button_mask = 0 # 关键：设为 0，假装没有按键，解除引擎的拖拽屏蔽
+    
+    get_viewport().input(fake_motion)
+
 # ============ 悬停状态机 ============
 func _update_hover_state(pos: Vector2):
+    var now = OS.get_ticks_msec()
+    if now - _last_check_time < 100: return
+    _last_check_time = now
+    
+    if _last_hover_pos != Vector2.ZERO and pos.distance_squared_to(_last_hover_pos) < 200:
+        return
+    _last_hover_pos = pos
+    
     var target = _find_item_at_position(pos)
     
     if target != _pending_hover_node:
-        # 手指移动到了新目标或空白处，重置计时器
         _pending_hover_node = target
         _hover_timer.stop()
         
-        # 如果移出了当前已弹窗的节点，立刻关闭
         if _current_hover_node != null and _current_hover_node != target:
             _trigger_hover_exit(_current_hover_node)
             _current_hover_node = null
@@ -136,46 +165,40 @@ func _on_hover_timeout():
 func _clear_hover_state():
     _hover_timer.stop()
     _pending_hover_node = null
+    _last_hover_pos = Vector2.ZERO
     if _current_hover_node != null and is_instance_valid(_current_hover_node):
         _trigger_hover_exit(_current_hover_node)
     _current_hover_node = null
 
-# 寻找鼠标/手指底下的物品卡片
 func _find_item_at_position(pos: Vector2) -> Control:
-    # 1. 找商店物品 (ShopItem)
     for node in get_tree().root.find_children("ShopItem*", "Control", true, false):
         if node.is_visible_in_tree() and node.get_global_rect().has_point(pos):
             return node
             
-    # 2. 找背包物品 (InventoryElement)
     for node in get_tree().root.find_children("InventoryElement*", "Control", true, false):
         if node.is_visible_in_tree() and node.get_global_rect().has_point(pos):
             return node
-            
     return null
 
-# 触发物品的“悬停进入”逻辑
+# 如果假鼠标事件失效，作为最终兜底：直接强行调用
 func _trigger_hover_enter(node: Control):
     if node.has_method("_on_BuyButton_mouse_entered"):
-        # 商店物品
         node._on_BuyButton_mouse_entered()
     elif node.has_method("_on_mouse_entered"):
-        # 背包物品
         node._on_mouse_entered()
     else:
-        # 兜底：直接发信号
+        # 尝试触发焦点，有时候游戏是利用 focus 来弹窗的
         node.emit_signal("mouse_entered")
+        node.emit_signal("focus_entered")
 
-# 触发物品的“悬停退出”逻辑
 func _trigger_hover_exit(node: Control):
     if node.has_method("_on_BuyButton_mouse_exited"):
-        # 商店物品
         node._on_BuyButton_mouse_exited()
     elif node.has_method("_on_mouse_exited"):
-        # 背包物品
         node._on_mouse_exited()
     else:
         node.emit_signal("mouse_exited")
+        node.emit_signal("focus_exited")
 
 # ============ 宝箱与升级UI限高（保持原样） ============
 func _wrap_and_lock_crate(popup_root: Control):
